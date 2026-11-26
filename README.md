@@ -20,3 +20,6 @@ Both boards publish declared wiring manifests on UART at boot and via `inventory
 
 ## P1.1 dosing calibration
 Seven independent pump calibrations on the slave, staged two-point model with three repeats per point and an independent interior verification. Verified data are stored per channel in NVS. `volume CH UL` requires validated calibration, no extrapolation. Raw `calpulse CH MS` is a separate opt-in commissioning operation; old `dose CH MS` removed. See [calibration](docs/v2-dosing-calibration.md). Both boards must be updated together (Modbus V3).
+
+## P1.2 supervised Sera NO2
+Opt-in, supervised state machine: measured 5 mL sample, separately measured equivalents of five drops of each reagent, operator mixing confirmations, 300 s reaction, correlated image request/confirmation, drain. No autonomous chemistry, automatic mixing or light relay during capture. Disabled by default. See [NO2 commissioning](docs/v2-no2.md). Both boards require Modbus V4.
