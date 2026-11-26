@@ -13,4 +13,7 @@ Use separate serial ports when uploading; monitor UART at 115200. Default builds
 See [bench wiring and commissioning](docs/v2-bench.md) and [register contract](docs/v2-modbus.md). CI builds both targets and runs shared host tests. Hardware acceptance is not implied by compilation.
 
 ## P0.6 USB camera commissioning
-A third, **camera-only** target for the same ESP32-S3 secondary board receives native USB UVC MJPEG and exports one fresh JPEG via UART. Do not run with load power connected. See [camera bench](docs/v2-camera.md). This is not yet integrated into the dosing slave or Kiosk. CI builds all three targets.
+A third, **camera-only** target for the same ESP32-S3 secondary board receives native USB UVC MJPEG and exports one fresh JPEG via UART. Do not run with load power connected. See [camera bench](docs/v2-camera.md). P0.8 also integrates on-demand UVC in the dosing slave, with an exclusive disarmed capture phase. Kiosk upload remains pending. CI builds all three targets.
+
+## P0.8 / P0.9
+Both boards publish declared wiring manifests on UART at boot and via `inventory`. Slave can capture a JPEG with the same firmware that controls dosing, but USB host and load operation are mutually exclusive. See [integration and inventory](docs/v2-integration.md). No physical-load discovery, Kiosk provisioning, chemical automation or hardware timing validation is claimed.

@@ -2,9 +2,10 @@
 #include <Wire.h>
 #include <Adafruit_ADS1X15.h>
 #include "../shared/Hardware.h"
+#include "../shared/Inventory.h"
+#include "../shared/Integration.h"
 using namespace wq;
-constexpr uint8_t RELAYS[]={20,19,21,42,41,40,39,38};
-Outputs outputs(RELAYS,8); Bus bus(Serial1); Line cli;
+Outputs outputs(EITEK_RELAYS,8); Bus bus(Serial1); Line cli;
 Adafruit_ADS1115 ads; bool adcReady=false;
 uint32_t lastPoll=0,lastSample=0,lastGood=0;
 bool linked=false; uint16_t seq=0,remoteState=0,remoteChannel=0;
@@ -75,13 +76,14 @@ void setup(){
     outputs.begin();Serial.begin(115200);Wire.begin(9,8);Wire.setTimeOut(25);
     adcReady=ads.begin(WQ_ADS_ADDRESS,&Wire);if(adcReady)ads.setGain(GAIN_TWOTHIRDS);
     bus.begin(18,17);
-    Serial.println("EITEK bench V2: status | arm | pulse CH MS | dose CH MS | stop");
+    Serial.println("EITEK bench V2: status | inventory | arm | pulse CH MS | dose CH MS | capture | stop");
+    inventory(true,false);
     Serial.println("No automated chemistry. Verify output polarity, ADC mode and RS485 before enabling.");
 }
 void loop(){
     uint32_t now=millis();outputs.tick(now);
     if(elapsed(now,lastPoll,250)){lastPoll=now;bool ok=poll();if(!ok&&WQ_ENABLE_RS485)outputs.stop();}
-    if(elapsed(now,lastSample,1000)){lastSample=now;
+    if(!outputs.gate.channel&&remoteChannel==0&&elapsed(now,lastSample,1000)){lastSample=now;
         // Check bus presence before library conversion to avoid missing-device busy wait.
         if(adcReady){Wire.beginTransmission(WQ_ADS_ADDRESS);if(Wire.endTransmission()==0){
             // Nonblocking conversion polling with bounded timeout.
@@ -98,9 +100,15 @@ void loop(){
     unsigned ch=0,ms=0;
     if(!strcmp(s,"stop")){stopAll();Serial.println("STOP");}
     else if(!strcmp(s,"status"))printStatus();
-    else if(!strcmp(s,"arm")){if(!WQ_ENABLE_RS485||!linked||remoteChannel){Serial.println("REJECT: link required");return;}
+    else if(!strcmp(s,"inventory")){
+        if(!outputs.gate.armed&&!remoteChannel&&remoteState!=STATE_CAMERA_BUSY)inventory(true,false);else Serial.println("REJECT busy");
+    }else if(!strcmp(s,"capture")){
+        if(!canMasterCapture(linked,outputs.gate.armed,remoteState,remoteChannel)){Serial.println("REJECT: disarm both controllers before capture");return;}
+        if(command(CMD_CAPTURE,0)){remoteState=STATE_CAMERA_BUSY;Serial.printf("CAM REQUEST %u (JPEG on slave UART)\n",seq?unsigned(seq):65536u);}
+        else Serial.println("REJECT: capture not acknowledged");
+    }else if(!strcmp(s,"arm")){if(!WQ_ENABLE_RS485||!canMasterArm(linked,outputs.gate.channel!=0,remoteState,remoteChannel)){Serial.println("REJECT: link or remote busy/fault");return;}
         if(!outputs.arm(millis())){Serial.println("REJECT: outputs disabled");return;}
-        if(!command(0xffff,0))outputs.stop();else remoteState=1;Serial.println(outputs.gate.armed?"ARM request accepted":"REJECT");}
+        if(!command(CMD_ARM,0))outputs.stop();else remoteState=1;Serial.println(outputs.gate.armed?"ARM request accepted":"REJECT");}
     else if(parsePulse(s,"pulse",ch,ms)){
         // Reserve OUT6 for inactive vial. No concurrent local/remote loads during bench tests.
         bool ok=ch>=1&&ch<=8&&ch!=6&&ms<=MAX_PULSE_MS&&linked&&remoteState==1&&remoteChannel==0&&outputs.pulse(ch,ms,8,millis());

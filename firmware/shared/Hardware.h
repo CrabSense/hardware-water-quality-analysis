@@ -55,7 +55,7 @@ public:
     }
     size_t receive(uint8_t* out){
         if(!WQ_ENABLE_RS485)return 0;
-        while(port.available()){
+        for(unsigned budget=0;budget<128&&port.available();++budget){
             int b=port.read();if(b<0)break;
             if(len<sizeof(buf))buf[len++]=uint8_t(b);else overflow=true;
             last=micros();
@@ -71,7 +71,7 @@ class Line {
     char b[80];size_t n=0;bool bad=false;
 public:
     const char* read(){
-        while(Serial.available()){
+        for(unsigned budget=0;budget<80&&Serial.available();++budget){
             char c=char(Serial.read());
             if(c=='\r'||c=='\n'){if(bad){bad=false;n=0;continue;}if(!n)continue;b[n]=0;n=0;return b;}
             if(n<sizeof(b)-1)b[n++]=c;else bad=true;
