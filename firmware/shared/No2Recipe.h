@@ -28,7 +28,7 @@ inline const char* stepName(No2Step s){
     case No2Step::Complete:return "complete";case No2Step::Fault:return "fault";
     }return "unknown";
 }
-struct No2Recipe {
+template<uint32_t ReactionMs> struct TwoLiquidRecipe {
     No2Step step=No2Step::Idle;
     No2Profile profile;
     uint32_t since=0;
@@ -61,7 +61,7 @@ struct No2Recipe {
         }
     }
     bool advanceReaction(uint32_t now){
-        if(step!=No2Step::Reaction||!elapsed(now,since,NO2_REACTION_MS))return false;
+        if(step!=No2Step::Reaction||!elapsed(now,since,ReactionMs))return false;
         move(No2Step::Image,now);return true;
     }
     bool imageConfirmed(uint32_t now){
@@ -73,6 +73,7 @@ struct No2Recipe {
             &&elapsed(now,since,NO2_CONFIRM_MS);
     }
 };
+using No2Recipe=TwoLiquidRecipe<NO2_REACTION_MS>;
 // Completion is electrical-command timing only, never a flow measurement.
 struct PulseReceipt {
     uint16_t sequence=0,result=0; // 0 none,1 running,2 timed complete,3 interrupted

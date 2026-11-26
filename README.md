@@ -26,3 +26,6 @@ Opt-in, supervised state machine: measured 5 mL sample, separately measured equi
 
 ## P1.3 supervised VASTOCEAN NO3
 Opt-in sequential assay, 5 mL, three liquid doses each equivalent to seven drops and one manual 1/3 scoop powder step with 10 s mixing gate, 120 s reaction, correlated image confirmation, OUT4/OUT7 drain. Confirm exact kit leaflet before use. NO2 and NO3 mutually exclusive. See [NO3 commissioning](docs/v2-no3.md). Modbus remains V4; update both boards to receive the slave loop timeout/receipt fix.
+
+## P1.4 supervised Thuy Phuoc NH3/NH4
+Opt-in, measured 5 mL sample, two liquid doses CH6/7 each equivalent to five drops, operator mixing, 600 s target reaction, image confirmation, OUT5/OUT7 drain. Candidate recipe based on retailer instructions, original kit leaflet and water-matrix compatibility must be verified before operation. NO2/NO3/NH3 share exclusive ownership through completion or fault until explicit reset. See [NH3 commissioning](docs/v2-nh3.md). Modbus V4 unchanged. No concentration inference.
