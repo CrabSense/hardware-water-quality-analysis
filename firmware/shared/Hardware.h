@@ -68,7 +68,7 @@ public:
     void discard(){if(!WQ_ENABLE_RS485)return;while(port.available())port.read();len=0;overflow=false;}
 };
 class Line {
-    char b[80];size_t n=0;bool bad=false;
+    char b[160];size_t n=0;bool bad=false;
 public:
     const char* read(){
         for(unsigned budget=0;budget<80&&Serial.available();++budget){

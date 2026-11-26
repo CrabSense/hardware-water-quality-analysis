@@ -38,3 +38,5 @@ Manual mask 1..7 or scheduled request (all three). Independent reaction timers w
 
 ## P1.6 supervised cleaning
 Persistent dirty mask on EITEK, written before any assay or manual ARM. Unknown boot state = all 3 dirty; new assays require clean journal. Per-vial timed initial drain, 1–5 water rinse cycles, manual route and final verification, shared waste drain each cycle; no reserve vial or reagent pumps. Disabled by default; see [cleaning](docs/v2-clean.md). No automatic proof of residue removal or power-loss resume. V4 unchanged.
+
+P2.1.2: [UART gateway request/ack protocol](docs/v2-gateway.md); Modbus V4 unchanged. Legacy console remains for physically supervised bench use, not concurrent with Kiosk.
