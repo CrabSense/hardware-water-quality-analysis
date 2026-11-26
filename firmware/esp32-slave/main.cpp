@@ -2,9 +2,12 @@
 #include <SPI.h>
 #include <Adafruit_MAX31865.h>
 #include "../shared/Hardware.h"
+#include "../shared/Inventory.h"
+#include "../shared/Integration.h"
+#include "CameraSession.h"
 using namespace wq;
-constexpr uint8_t PUMPS[]={4,5,6,7,15,16,17,18};
-Outputs outputs(PUMPS,8);Bus bus(Serial1);Line cli;Replay replay;
+Outputs outputs(SLAVE_PUMPS,8);Bus bus(Serial1);Line cli;Replay replay;CameraSession camera;
+bool linkSeen=false;
 Adafruit_MAX31865 rtd(10,&SPI);
 uint32_t lastLink=0,lastSample=0;bool rtdReady=false;
 uint16_t temperature=INVALID_TEMP;
@@ -23,9 +26,9 @@ void handle(const uint8_t* b,size_t n){
     if(!valid(b,n)||b[0]!=UNIT)return;
     if(b[1]==3){
         if(n!=8||word(b+2)!=0||word(b+4)!=4){exception(3,2);return;}
-        lastLink=millis();outputs.tick(lastLink);
+        lastLink=millis();linkSeen=true;outputs.tick(lastLink);
         uint8_t r[13]={UNIT,3,8};
-        put(r+3,outputs.gate.armed?(outputs.gate.channel?2:1):0);
+        put(r+3,camera.gate.state(outputs.gate));
         put(r+5,outputs.gate.channel);put(r+7,temperature);put(r+9,replay.seen?replay.seq:0);
         bus.send(r,seal(r,11));return;
     }
@@ -35,11 +38,14 @@ void handle(const uint8_t* b,size_t n){
     uint32_t now=millis();outputs.tick(now);
     // STOP always wins, even if sequence reused.
     bool ok=false;
-    if(ch==0&&ms==0){outputs.stop();ok=true;}
+    if(ch==0&&ms==0){outputs.stop();camera.cancel();ok=true;}
     else if(replay.identical(seq,ch,ms)){ok=true;} // acknowledge without re-execution
-    else if(replay.conflict(seq)){exception(16,3);return;}
-    else if(ch==0xffff&&ms==0&&!elapsed(now,lastLink,LINK_LEASE_MS)){ok=outputs.arm(now);}
-    else if(ch>=1&&ch<=7&&ms>0&&ms<=MAX_PULSE_MS&&!elapsed(now,lastLink,LINK_LEASE_MS)){
+    else if(!nextSequence(replay,seq)){exception(16,3);return;}
+    else if(ch==CMD_CAPTURE&&ms==0&&linkSeen&&!elapsed(now,lastLink,LINK_LEASE_MS)){
+        ok=camera.request(seq?seq:65536,outputs.gate.armed);
+    }
+    else if(ch==CMD_ARM&&ms==0&&linkSeen&&camera.gate.canArm()&&!elapsed(now,lastLink,LINK_LEASE_MS)){ok=outputs.arm(now);}
+    else if(ch>=1&&ch<=7&&ms>0&&ms<=MAX_PULSE_MS&&linkSeen&&camera.gate.canArm()&&!elapsed(now,lastLink,LINK_LEASE_MS)){
         ok=outputs.pulse(ch,ms,7,now);
     }
     if(!ok){exception(16,3);return;}
@@ -53,22 +59,34 @@ void setup(){
         rtdReady=rtd.begin(WQ_PT100_WIRES==3?MAX31865_3WIRE:WQ_PT100_WIRES==4?MAX31865_4WIRE:MAX31865_2WIRE);
         if(rtdReady)rtd.enable50Hz(true);
     }
-    Serial.println("Slave V2 bench: remote ARM/pulse only; local status | stop. UVC not implemented.");
+    Serial.println("Slave V2: remote ARM/pulse/capture, local status | stop | inventory | capture ID");
+    inventory(false,true);
 }
 void loop(){
     uint32_t now=millis();outputs.tick(now);
-    if(elapsed(now,lastLink,LINK_LEASE_MS))outputs.stop();
+    if(!linkSeen||elapsed(now,lastLink,LINK_LEASE_MS))outputs.stop();
     uint8_t buf[64];size_t n=bus.receive(buf);if(n)handle(buf,n);
     // MAX31865 library conversion blocks ~75ms. Never sample during active dosing;
     // this avoids delaying OFF timing. Publish invalid if old temperature too stale.
-    if(rtdReady&&!outputs.gate.channel&&elapsed(now,lastSample,1000)){
+    if(rtdReady&&!outputs.gate.channel&&camera.gate.canArm()&&elapsed(now,lastSample,1000)){
         lastSample=now;float c=rtd.temperature(100.0f,WQ_PT100_RREF);uint8_t fault=rtd.readFault();
         temperature=(!fault&&isfinite(c)&&c>=-10&&c<=60)?uint16_t(int16_t(lroundf(c*100))):INVALID_TEMP;
         if(fault)rtd.clearFault();
     }
     if(elapsed(now,lastSample,3000))temperature=INVALID_TEMP;
     const char* s=cli.read();
-    if(s){if(!strcmp(s,"stop")){outputs.stop();Serial.println("STOP");}
-        else if(!strcmp(s,"status"))Serial.printf("armed=%d ch=%u temp_raw=%u\n",outputs.gate.armed,outputs.gate.channel,temperature);
-        else Serial.println("Unknown command");}
+    if(s){
+        if(!strcmp(s,"stop")){outputs.stop();camera.cancel();Serial.println("STOP");}
+        else if(!strcmp(s,"status"))Serial.printf("armed=%d ch=%u temp_raw=%u camera_state=%u\n",outputs.gate.armed,outputs.gate.channel,temperature,camera.gate.state(outputs.gate));
+        else if(!strcmp(s,"inventory")){
+            if(!outputs.gate.armed&&!camera.gate.busy())inventory(false,true);else Serial.println("REJECT busy");
+        }else{
+            unsigned long id=0;char extra;
+            if(strncmp(s,"capture ",8)==0&&sscanf(s,"capture %lu %c",&id,&extra)==1&&id&&id<=UINT32_MAX){
+                if(camera.request(uint32_t(id),outputs.gate.armed))Serial.printf("CAM WAIT %lu\n",id);
+                else Serial.printf("CAM ERROR %lu not_ready_or_busy\n",id);
+            }else Serial.println("Unknown command");
+        }
+    }
+    if(!outputs.gate.armed)camera.tick();
 }

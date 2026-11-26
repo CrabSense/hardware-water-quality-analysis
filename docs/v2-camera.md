@@ -20,3 +20,6 @@ The tool requests a fresh frame using a random ID, checks frame size, offsets, C
 
 ## Gate to integration
 Verify actual HUAQUE USB VID/PID, descriptor, resolution, bandwidth, stable frames, available RAM, lighting/locked exposure and white balance. Only then integrate UVC in dosing slave with independent execution and verified OFF deadlines under USB load. Define capture command, image upload to Kiosk and failure policy. Reflash esp32-slave after camera-only test; never enable loads in camera test. No hardware verification claimed by CI.
+
+## P0.8 update
+The primary `esp32-slave` target now also supports on-demand capture. Unlike the standalone continuous-stream bench, the integrated session starts USB only when disarmed and stops it before UART export. See [integration](v2-integration.md). The standalone bench remains available for descriptor/debug testing.
