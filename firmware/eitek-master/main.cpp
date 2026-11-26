@@ -4,11 +4,15 @@
 #include "../shared/Hardware.h"
 #include "../shared/Inventory.h"
 #include "../shared/Integration.h"
+#include "../shared/DosingCalibration.h"
+#ifndef WQ_ENABLE_CAL_PULSE
+#define WQ_ENABLE_CAL_PULSE 0
+#endif
 using namespace wq;
 Outputs outputs(EITEK_RELAYS,8); Bus bus(Serial1); Line cli;
 Adafruit_ADS1115 ads; bool adcReady=false;
 uint32_t lastPoll=0,lastSample=0,lastGood=0;
-bool linked=false; uint16_t seq=0,remoteState=0,remoteChannel=0;
+bool linked=false; uint16_t seq=0,remoteState=0,remoteChannel=0,calMask=0;
 int16_t remoteTemp=static_cast<int16_t>(INVALID_TEMP);
 float adc1=NAN,adc2=NAN;
 #ifndef WQ_ADS_ADDRESS
@@ -44,9 +48,9 @@ bool transact(uint8_t* req,size_t n,uint8_t* res,size_t& rn){
     return false;
 }
 bool poll(){
-    uint8_t req[8]={UNIT,3,0,0,0,4};uint8_t res[64];size_t n=0;
-    if(!transact(req,seal(req,6),res,n)||n!=13||res[2]!=8){linked=false;return false;}
-    remoteState=word(res+3);remoteChannel=word(res+5);remoteTemp=static_cast<int16_t>(word(res+7));
+    uint8_t req[8]={UNIT,3,0,0,0,6};uint8_t res[64];size_t n=0;
+    if(!transact(req,seal(req,6),res,n)||n!=17||res[2]!=12||word(res+13)!=DOSING_PROTOCOL){linked=false;calMask=0;return false;}
+    calMask=word(res+11)&0x7f;remoteState=word(res+3);remoteChannel=word(res+5);remoteTemp=static_cast<int16_t>(word(res+7));
     // Fourth register is last accepted sequence. Sync on first connection.
     if(!linked)seq=word(res+9);
     linked=true;lastGood=millis();return true;
@@ -70,13 +74,13 @@ void printStatus(){
         float ppm=(133.42f*v*v*v-255.86f*v*v+857.39f*v)*0.5f*WQ_TDS_FACTOR;
         if(isfinite(ppm)&&raw>=0&&raw<2.3f&&t>=0&&t<=50&&ppm>=0&&ppm<=1000)Serial.printf(" tds_ppm=%.1f",ppm);else Serial.print(" tds=OUT_OF_RANGE");
     }else Serial.print(" tds=UNCALIBRATED_OR_INVALID");
-    Serial.println();
+    Serial.printf(" cal_mask=0x%02x all_calibrated=%u\n",unsigned(calMask),unsigned(calMask==0x7f));
 }
 void setup(){
     outputs.begin();Serial.begin(115200);Wire.begin(9,8);Wire.setTimeOut(25);
     adcReady=ads.begin(WQ_ADS_ADDRESS,&Wire);if(adcReady)ads.setGain(GAIN_TWOTHIRDS);
     bus.begin(18,17);
-    Serial.println("EITEK bench V2: status | inventory | arm | pulse CH MS | dose CH MS | capture | stop");
+    Serial.println("EITEK bench V2: status | inventory | arm | pulse CH MS | calpulse CH MS | volume CH UL | capture | stop");
     inventory(true,false);
     Serial.println("No automated chemistry. Verify output polarity, ADC mode and RS485 before enabling.");
 }
@@ -97,7 +101,7 @@ void loop(){
         printStatus();
     }
     const char* s=cli.read();if(!s)return;
-    unsigned ch=0,ms=0;
+    unsigned ch=0,ms=0;uint32_t args[2]={};
     if(!strcmp(s,"stop")){stopAll();Serial.println("STOP");}
     else if(!strcmp(s,"status"))printStatus();
     else if(!strcmp(s,"inventory")){
@@ -113,9 +117,16 @@ void loop(){
         // Reserve OUT6 for inactive vial. No concurrent local/remote loads during bench tests.
         bool ok=ch>=1&&ch<=8&&ch!=6&&ms<=MAX_PULSE_MS&&linked&&remoteState==1&&remoteChannel==0&&outputs.pulse(ch,ms,8,millis());
         Serial.println(ok?"OK":"REJECT");
-    }else if(parsePulse(s,"dose",ch,ms)){
-        outputs.tick(millis());
-        bool ok=ch>=1&&ch<=7&&ms>0&&ms<=MAX_PULSE_MS&&linked&&outputs.gate.armed&&!outputs.gate.channel&&remoteState==1&&remoteChannel==0;
-        if(ok){ok=command(ch,ms);if(ok){remoteState=2;remoteChannel=ch;}}Serial.println(ok?"OK":"REJECT");
+    }else if(parseNumbers(s,"calpulse",args,2)||parseNumbers(s,"volume",args,2)){
+        outputs.tick(millis());const bool raw=!strncmp(s,"calpulse ",9);
+        const uint32_t pump=args[0],amount=args[1];
+        bool ok=pump>=1&&pump<=7&&amount>0&&linked&&outputs.gate.armed&&!outputs.gate.channel&&remoteState==1&&remoteChannel==0;
+        if(ok){
+            if(raw)ok=WQ_ENABLE_CAL_PULSE&&amount>=CAL_MIN_MS&&amount<=MAX_PULSE_MS;
+            else ok=amount<=CAL_MAX_UL&&(calMask&(1u<<(pump-1)));
+        }
+        if(ok){ok=command(uint16_t(raw?pump:VOLUME_COMMAND_BASE+pump),uint16_t(amount));
+            if(ok){remoteState=2;remoteChannel=uint16_t(pump);}else stopAll();}
+        Serial.println(ok?"ACCEPTED not measured":"REJECT");
     }else Serial.println("Unknown command");
 }

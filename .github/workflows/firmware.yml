@@ -12,6 +12,7 @@ jobs:
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/bench_test.cpp -o /tmp/bench && /tmp/bench
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/camera_test.cpp -o /tmp/camera-test && /tmp/camera-test
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/integration_test.cpp -o /tmp/integration-test && /tmp/integration-test
+      - run: g++ -std=c++17 -Wall -Wextra -Werror tests/calibration_test.cpp -o /tmp/calibration-test && /tmp/calibration-test
       - run: python3 -m unittest discover -s tests -p 'test_camera*.py'
   build:
     runs-on: ubuntu-latest

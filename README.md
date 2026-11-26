@@ -17,3 +17,6 @@ A third, **camera-only** target for the same ESP32-S3 secondary board receives n
 
 ## P0.8 / P0.9
 Both boards publish declared wiring manifests on UART at boot and via `inventory`. Slave can capture a JPEG with the same firmware that controls dosing, but USB host and load operation are mutually exclusive. See [integration and inventory](docs/v2-integration.md). No physical-load discovery, Kiosk provisioning, chemical automation or hardware timing validation is claimed.
+
+## P1.1 dosing calibration
+Seven independent pump calibrations on the slave, staged two-point model with three repeats per point and an independent interior verification. Verified data are stored per channel in NVS. `volume CH UL` requires validated calibration, no extrapolation. Raw `calpulse CH MS` is a separate opt-in commissioning operation; old `dose CH MS` removed. See [calibration](docs/v2-dosing-calibration.md). Both boards must be updated together (Modbus V3).

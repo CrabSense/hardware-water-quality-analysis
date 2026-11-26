@@ -30,6 +30,7 @@ struct Gate {
     bool pulse(uint8_t ch,uint16_t ms,uint8_t limit,uint32_t now){
         tick(now);
         if(!armed||channel||ch<1||ch>limit||!ms||ms>MAX_PULSE_MS)return false;
+        if(uint32_t(now-armedAt)+ms>ARM_LEASE_MS)return false;
         channel=ch;started=now;duration=ms;return true;
     }
     void tick(uint32_t now){if(armed&&elapsed(now,armedAt,ARM_LEASE_MS))disarm();
