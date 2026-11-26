@@ -85,7 +85,7 @@ void setup(){
     inventory(false,true);
 }
 void loop(){
-    uint32_t now=millis();outputs.tick(now);
+    uint32_t now=millis();tickLoads(now);
     uint8_t buf[64];size_t n=bus.receive(buf);if(n)handle(buf,n);
     // MAX31865 library conversion blocks ~75ms. Never sample during active dosing;
     // this avoids delaying OFF timing. Publish invalid if old temperature too stale.
