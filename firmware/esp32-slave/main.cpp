@@ -5,8 +5,12 @@
 #include "../shared/Inventory.h"
 #include "../shared/Integration.h"
 #include "CameraSession.h"
+#include "CalibrationStore.h"
+#ifndef WQ_ENABLE_CAL_PULSE
+#define WQ_ENABLE_CAL_PULSE 0
+#endif
 using namespace wq;
-Outputs outputs(SLAVE_PUMPS,8);Bus bus(Serial1);Line cli;Replay replay;CameraSession camera;
+Outputs outputs(SLAVE_PUMPS,8);Bus bus(Serial1);Line cli;Replay replay;CameraSession camera;CalibrationStore calibration;
 bool linkSeen=false;
 Adafruit_MAX31865 rtd(10,&SPI);
 uint32_t lastLink=0,lastSample=0;bool rtdReady=false;
@@ -25,12 +29,13 @@ void exception(uint8_t fn,uint8_t code){uint8_t r[5]={UNIT,uint8_t(fn|0x80),code
 void handle(const uint8_t* b,size_t n){
     if(!valid(b,n)||b[0]!=UNIT)return;
     if(b[1]==3){
-        if(n!=8||word(b+2)!=0||word(b+4)!=4){exception(3,2);return;}
+        if(n!=8||word(b+2)!=0||word(b+4)!=6){exception(3,2);return;}
         lastLink=millis();linkSeen=true;outputs.tick(lastLink);
-        uint8_t r[13]={UNIT,3,8};
+        uint8_t r[17]={UNIT,3,12};
         put(r+3,camera.gate.state(outputs.gate));
         put(r+5,outputs.gate.channel);put(r+7,temperature);put(r+9,replay.seen?replay.seq:0);
-        bus.send(r,seal(r,11));return;
+        put(r+11,calibration.mask());put(r+13,DOSING_PROTOCOL);
+        bus.send(r,seal(r,15));return;
     }
     if(b[1]!=16){exception(b[1],1);return;}
     if(n!=15||word(b+2)!=16||word(b+4)!=3||b[6]!=6){exception(16,3);return;}
@@ -45,21 +50,26 @@ void handle(const uint8_t* b,size_t n){
         ok=camera.request(seq?seq:65536,outputs.gate.armed);
     }
     else if(ch==CMD_ARM&&ms==0&&linkSeen&&camera.gate.canArm()&&!elapsed(now,lastLink,LINK_LEASE_MS)){ok=outputs.arm(now);}
-    else if(ch>=1&&ch<=7&&ms>0&&ms<=MAX_PULSE_MS&&linkSeen&&camera.gate.canArm()&&!elapsed(now,lastLink,LINK_LEASE_MS)){
-        ok=outputs.pulse(ch,ms,7,now);
+    else if(linkSeen&&camera.gate.canArm()&&!elapsed(now,lastLink,LINK_LEASE_MS)){
+        if(ch>=1&&ch<=7&&WQ_ENABLE_CAL_PULSE&&ms>=CAL_MIN_MS&&ms<=MAX_PULSE_MS){
+            ok=outputs.pulse(ch,ms,7,now);
+        }else if(ch>VOLUME_COMMAND_BASE&&ch<=VOLUME_COMMAND_BASE+7){
+            const uint8_t pump=uint8_t(ch-VOLUME_COMMAND_BASE);uint16_t duration=0;
+            if(calibration.duration(pump,ms,duration))ok=outputs.pulse(pump,duration,7,now);
+        }
     }
     if(!ok){exception(16,3);return;}
     replay.save(seq,ch,ms);lastLink=now;
     uint8_t r[8];memcpy(r,b,6);bus.send(r,seal(r,6));
 }
 void setup(){
-    outputs.begin();Serial.begin(115200);bus.begin(9,8);
+    outputs.begin();Serial.begin(115200);calibration.begin();bus.begin(9,8);
     SPI.begin(12,13,11,10);
     if(WQ_ENABLE_PT100){
         rtdReady=rtd.begin(WQ_PT100_WIRES==3?MAX31865_3WIRE:WQ_PT100_WIRES==4?MAX31865_4WIRE:MAX31865_2WIRE);
         if(rtdReady)rtd.enable50Hz(true);
     }
-    Serial.println("Slave V2: remote ARM/pulse/capture, local status | stop | inventory | capture ID");
+    Serial.println("Slave V2: remote ARM/calibration pulse/volume/capture, local status | stop | inventory | capture ID | cal list");
     inventory(false,true);
 }
 void loop(){
@@ -80,6 +90,9 @@ void loop(){
         else if(!strcmp(s,"status"))Serial.printf("armed=%d ch=%u temp_raw=%u camera_state=%u\n",outputs.gate.armed,outputs.gate.channel,temperature,camera.gate.state(outputs.gate));
         else if(!strcmp(s,"inventory")){
             if(!outputs.gate.armed&&!camera.gate.busy())inventory(false,true);else Serial.println("REJECT busy");
+        }else if(!strncmp(s,"cal ",4)){
+            if(outputs.gate.armed||!camera.gate.canArm())Serial.println("CAL ERROR busy");
+            else if(!calibration.handle(s))Serial.println("CAL ERROR syntax");
         }else{
             unsigned long id=0;char extra;
             if(strncmp(s,"capture ",8)==0&&sscanf(s,"capture %lu %c",&id,&extra)==1&&id&&id<=UINT32_MAX){
