@@ -3,7 +3,7 @@
 #include <stdint.h>
 namespace wq {
 constexpr uint16_t VOLUME_COMMAND_BASE=0x100;
-constexpr uint16_t DOSING_PROTOCOL=3;
+constexpr uint16_t DOSING_PROTOCOL=4;
 constexpr uint32_t CAL_SCHEMA=1;
 constexpr uint32_t CAL_MIN_MS=250;
 constexpr uint32_t CAL_MIN_SPAN_MS=500;
