@@ -35,3 +35,6 @@ At sample pulse completion before any reagent, master snapshots calibrated pH an
 
 ## P1.5 supervised batch coordinator
 Manual mask 1..7 or scheduled request (all three). Independent reaction timers with exclusive actuator/camera ownership; longest reactions first; reject deadline conflicts, require manual routing/mixing/powder and optical positioning, verify image identity before drain; one shared total drain. Disabled by default; no RTC schedule or unattended chemistry. See [batch commissioning](docs/v2-batch.md). Modbus V4 unchanged.
+
+## P1.6 supervised cleaning
+Persistent dirty mask on EITEK, written before any assay or manual ARM. Unknown boot state = all 3 dirty; new assays require clean journal. Per-vial timed initial drain, 1–5 water rinse cycles, manual route and final verification, shared waste drain each cycle; no reserve vial or reagent pumps. Disabled by default; see [cleaning](docs/v2-clean.md). No automatic proof of residue removal or power-loss resume. V4 unchanged.
