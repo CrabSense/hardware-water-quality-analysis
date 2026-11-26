@@ -29,3 +29,6 @@ Opt-in sequential assay, 5 mL, three liquid doses each equivalent to seven drops
 
 ## P1.4 supervised Thuy Phuoc NH3/NH4
 Opt-in, measured 5 mL sample, two liquid doses CH6/7 each equivalent to five drops, operator mixing, 600 s target reaction, image confirmation, OUT5/OUT7 drain. Candidate recipe based on retailer instructions, original kit leaflet and water-matrix compatibility must be verified before operation. NO2/NO3/NH3 share exclusive ownership through completion or fault until explicit reset. See [NH3 commissioning](docs/v2-nh3.md). Modbus V4 unchanged. No concentration inference.
+
+## P1.4.1 NH3 sample evidence
+At sample pulse completion before any reagent, master snapshots calibrated pH and fresh Modbus temperature observation. Missing/invalid readings are null. Emits NH3 SAMPLE JSON and NH3 IMAGE_LINK JSON with shared boot-session identifier; nh3 evidence reprints snapshot while no output active. Boot uptime only; gateway must establish real UTC/time alignment and physical sensor-vial association. No salinity inferred from TDS and no NH3 conversion on firmware. See [NH3 commissioning](docs/v2-nh3.md).
