@@ -10,12 +10,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/bench_test.cpp -o /tmp/bench && /tmp/bench
+      - run: g++ -std=c++17 -Wall -Wextra -Werror tests/camera_test.cpp -o /tmp/camera-test && /tmp/camera-test
+      - run: python3 -m unittest discover -s tests -p 'test_camera*.py'
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        env: [eitek-master, esp32-slave]
+        env: [eitek-master, esp32-slave, esp32-camera-bench]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
