@@ -12,6 +12,7 @@
 #include "../shared/SampleEvidence.h"
 #include "../shared/BatchPlan.h"
 #include "DirtyStore.h"
+#include "../shared/GatewayProtocol.h"
 #ifndef WQ_ENABLE_CLEAN_SUPERVISED
 #define WQ_ENABLE_CLEAN_SUPERVISED 0
 #endif
@@ -43,6 +44,7 @@ bool no3Issued=false;uint16_t no3Seq=0;uint32_t no3ImageId=0,no3IssuedAt=0;
 Nh3Recipe nh3;Nh3Profile nh3Profile;
 bool nh3Issued=false;uint16_t nh3Seq=0;uint32_t nh3ImageId=0,nh3IssuedAt=0;
 SampleEvidence nh3Evidence;char nh3SessionId[17]={};
+GatewaySequence gwSequence;char gwBoot[17]={};bool gwAccepted=false;
 DirtyStore dirtyStore;CleanPlan cleaning;CleanProfile cleanProfiles[3];
 bool cleanIssued=false;uint32_t cleanPulseAt=0;
 BatchPlan batch;char batchId[17]={};bool batchOptical=false,batchTotalIssued=false;
@@ -184,7 +186,7 @@ bool no2Cli(const char* s){
         if(assayBlocked(AssayId::No2,no2,no3,nh3)||no2.step!=No2Step::Idle||outputs.gate.armed||!no2RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
         No2Profile p;p.sourceMs=v[0];p.sampleMs=v[1];p.r1Ul=v[2];p.r2Ul=v[3];p.drainMs=v[4];p.totalDrainMs=v[5];
         if(!p.valid()){no2Profile=No2Profile{};Serial.println("REJECT profile");}
-        else{no2Profile=p;Serial.println("NO2 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
+        else{no2Profile=p;gwAccepted=true;Serial.println("NO2 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
         return true;
     }
     if(!strcmp(s,"no2 start")){
@@ -293,7 +295,7 @@ bool no3Cli(const char* s){
         if(assayBlocked(AssayId::No3,no2,no3,nh3)||no3.step!=No3Step::Idle||outputs.gate.armed||!no3RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
         No3Profile p;p.sourceMs=v[0];p.sampleMs=v[1];p.r1Ul=v[2];p.r2Ul=v[3];p.r3Ul=v[4];p.drainMs=v[5];p.totalDrainMs=v[6];
         if(!p.valid()){no3Profile=No3Profile{};Serial.println("REJECT profile");}
-        else{no3Profile=p;Serial.println("NO3 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
+        else{no3Profile=p;gwAccepted=true;Serial.println("NO3 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
         return true;
     }
     if(!strcmp(s,"no3 start")){
@@ -442,7 +444,7 @@ bool nh3Cli(const char* s){
         if(assayBlocked(AssayId::Nh3,no2,no3,nh3)||nh3.step!=Nh3Step::Idle||outputs.gate.armed||!nh3RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
         Nh3Profile p;p.sourceMs=v[0];p.sampleMs=v[1];p.r1Ul=v[2];p.r2Ul=v[3];p.drainMs=v[4];p.totalDrainMs=v[5];
         if(!p.valid()){nh3Profile=Nh3Profile{};Serial.println("REJECT profile");}
-        else{nh3Profile=p;Serial.println("NH3 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
+        else{nh3Profile=p;gwAccepted=true;Serial.println("NH3 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
         return true;
     }
     if(!strcmp(s,"nh3 start")){
@@ -610,36 +612,36 @@ bool batchCli(const char* cmd){
     uint32_t args[2]={};
     if(!strcmp(cmd,"batch status")){batchStatus();return true;}
     if(!strcmp(cmd,"batch start scheduled")){
-        Serial.println(batchStart(7,true)?"BATCH ACCEPTED supervised scheduled request":"REJECT batch preflight");return true;
+        gwAccepted=batchStart(7,true);Serial.println(gwAccepted?"BATCH ACCEPTED supervised scheduled request":"REJECT batch preflight");return true;
     }
     if(parseNumbers(cmd,"batch start manual",args,1)){
-        Serial.println(batchStart(args[0],false)?"BATCH ACCEPTED supervised manual request":"REJECT batch preflight");return true;
+        gwAccepted=batchStart(args[0],false);Serial.println(gwAccepted?"BATCH ACCEPTED supervised manual request":"REJECT batch preflight");return true;
     }
     if(!strcmp(cmd,"batch reset")){
         if(!batch.held()||batch.running()||!batchIdleRemote()){Serial.println("REJECT batch reset");return true;}
         no2.reset(millis());no3.reset(millis());nh3.reset(millis());
         no2Profile=No2Profile{};no3Profile=No3Profile{};nh3Profile=Nh3Profile{};
         nh3Evidence=SampleEvidence{};nh3SessionId[0]=0;imageId=no3ImageId=nh3ImageId=0;
-        batch.reset();batchId[0]=0;routePrompt=0;Serial.println("BATCH RESET; operator confirms physical recovery and cleaning");return true;
+        batch.reset();batchId[0]=0;routePrompt=0;gwAccepted=true;Serial.println("BATCH RESET; operator confirms physical recovery and cleaning");return true;
     }
     if(!batch.held())return false;
     if(!strcmp(cmd,"stop")||!strcmp(cmd,"batch stop")){
         if(batch.running())batchFault("operator_stop");else stopAll();return true;
     }
     if(parseNumbers(cmd,"batch route",args,1)){
-        Serial.println(args[0]>=1&&args[0]<=3&&batchBeginPrep(uint8_t(args[0]))?"BATCH ROUTE ACCEPTED":"REJECT route");return true;
+        gwAccepted=args[0]>=1&&args[0]<=3&&batchBeginPrep(uint8_t(args[0]));Serial.println(gwAccepted?"BATCH ROUTE ACCEPTED":"REJECT route");return true;
     }
     if(parseNumbers(cmd,"batch confirm",args,1)){
-        Serial.println(args[0]>=1&&args[0]<=3&&batchConfirm(uint8_t(args[0]))?"BATCH CONFIRMED":"REJECT confirmation");return true;
+        gwAccepted=args[0]>=1&&args[0]<=3&&batchConfirm(uint8_t(args[0]));Serial.println(gwAccepted?"BATCH CONFIRMED":"REJECT confirmation");return true;
     }
     if(parseNumbers(cmd,"batch optical",args,1)){
         if(args[0]==batch.owner&&!batchOptical&&batchIdleRemote()&&batch.dispatchAllowed(millis())){
-            batchOptical=true;Serial.println("BATCH OPTICAL ACCEPTED");
+            batchOptical=true;gwAccepted=true;Serial.println("BATCH OPTICAL ACCEPTED");
         }else Serial.println("REJECT optical");
         return true;
     }
     if(parseNumbers(cmd,"batch image",args,2)){
-        Serial.println(args[0]>=1&&args[0]<=3&&batchConfirmImage(uint8_t(args[0]),args[1])?"BATCH IMAGE CONFIRMED":"REJECT image");return true;
+        gwAccepted=args[0]>=1&&args[0]<=3&&batchConfirmImage(uint8_t(args[0]),args[1]);Serial.println(gwAccepted?"BATCH IMAGE CONFIRMED":"REJECT image");return true;
     }
     if(!strcmp(cmd,"nh3 evidence")&&!outputs.gate.armed&&!remoteChannel){nh3EmitEvidence();return true;}
     Serial.println("REJECT batch owns controls; use batch status/route/confirm/optical/image/stop/reset");return true;
@@ -691,12 +693,12 @@ bool cleanCli(const char* cmd){
     if(!strcmp(cmd,"clean reset")){
         if(assayRunning()||cleaning.active()||!cleanIdleRemote()){Serial.println("REJECT clean reset");return true;}
         cleaning.reset();for(auto& p:cleanProfiles)p=CleanProfile{};cleanIssued=false;
-        Serial.println("CLEAN RESET; dirty mask unchanged");cleanStatus();return true;
+        gwAccepted=true;Serial.println("CLEAN RESET; dirty mask unchanged");cleanStatus();return true;
     }
     if(parseNumbers(cmd,"clean profile",v,7)){
         if(assayRunning()||cleaning.step!=CleanStep::Idle||!cleanIdleRemote()||v[0]<1||v[0]>3){Serial.println("REJECT clean profile");return true;}
         CleanProfile p;p.sourceMs=v[1];p.fillMs=v[2];p.settleMs=v[3];p.drainMs=v[4];p.totalMs=v[5];p.cycles=v[6];
-        cleanProfiles[v[0]-1]=p.valid()?p:CleanProfile{};Serial.println(p.valid()?"CLEAN PROFILE staged":"REJECT profile bounds");return true;
+        cleanProfiles[v[0]-1]=p.valid()?p:CleanProfile{};gwAccepted=p.valid();Serial.println(gwAccepted?"CLEAN PROFILE staged":"REJECT profile bounds");return true;
     }
     if(parseNumbers(cmd,"clean start",v,1)){
         if(!WQ_ENABLE_CLEAN_SUPERVISED||!WQ_ENABLE_OUTPUTS||!WQ_ENABLE_RS485||assayRunning()
@@ -707,11 +709,11 @@ bool cleanCli(const char* cmd){
         for(uint8_t i=0;i<3;++i)if((m&(1u<<i))&&!cleanProfiles[i].valid()){Serial.println("REJECT missing clean profile");return true;}
         // Journal before any pulse, even if cleaning previously clean vials.
         if(!dirtyStore.mark(m)||!cleaning.start(m,cleanProfiles,millis())){Serial.println("REJECT dirty journal or plan");return true;}
-        cleanMoveLog();return true;
+        gwAccepted=true;cleanMoveLog();return true;
     }
     if(parseNumbers(cmd,"clean route",v,1)){
         if(v[0]<1||v[0]>3||!cleanIdleRemote()||!cleaning.route(uint8_t(v[0]),millis()))Serial.println("REJECT clean route");
-        else cleanMoveLog();
+        else{gwAccepted=true;cleanMoveLog();}
         return true;
     }
     if(parseNumbers(cmd,"clean verify",v,1)){
@@ -720,11 +722,39 @@ bool cleanCli(const char* cmd){
             if(cleaning.verified!=cleaning.mask||!dirtyStore.verified(cleaning.mask)){cleanFault("journal_commit");return true;}
             Serial.println("CLEAN COMPLETE operator-verified rinse, not chemical residue measurement");
         }
-        cleanMoveLog();return true;
+        gwAccepted=true;cleanMoveLog();return true;
     }
     if((cleaning.active()||cleaning.step==CleanStep::Fault)&&(!strcmp(cmd,"stop")||!strcmp(cmd,"clean stop"))){if(cleaning.active())cleanFault("operator_stop");else stopAll();return true;}
     if(cleaning.active()||cleaning.step==CleanStep::Fault){Serial.println("REJECT cleaning owns controls or fault; use clean status/reset");return true;}
     return false;
+}
+
+bool gatewayCli(const char* line){
+    if(!strncmp(line,"gw hello ",9)){
+        if(!gwHex(line+9,32))return true;
+        Serial.printf("GW HELLO {\"version\":1,\"nonce\":\"%s\",\"boot_id\":\"%s\",\"last_seq\":%lu,\"uptime_ms\":%lu}\n",
+            line+9,gwBoot,(unsigned long)gwSequence.last,(unsigned long)millis());
+        return true;
+    }
+    if(strncmp(line,"gw ",3))return false;
+    GatewayRequest r;
+    if(!r.parse(line)){Serial.println("GW ERROR malformed");return true;}
+    gwAccepted=false;const char* reason="rejected";
+    if(strcmp(r.boot,gwBoot))reason="boot_mismatch";
+    else if(!gwSequence.consume(r.seq))reason="sequence_mismatch";
+    else if(!gwAllowed(r.cmd))reason="unsupported";
+    else{
+        // Use the same interlocks as the console, with explicit handler results.
+        if(cleaning.active()||cleaning.step==CleanStep::Fault)cleanCli(r.cmd);
+        else if(batch.held()){if(!cleanCli(r.cmd))batchCli(r.cmd);}
+        else if(!cleanCli(r.cmd)&&!batchCli(r.cmd)){
+            if(!no2Cli(r.cmd)&&!no3Cli(r.cmd))nh3Cli(r.cmd);
+        }
+        if(gwAccepted)reason="accepted";
+    }
+    Serial.printf("GW ACK {\"version\":1,\"boot_id\":\"%s\",\"request_id\":\"%s\",\"seq\":%lu,\"accepted\":%s,\"reason\":\"%s\",\"uptime_ms\":%lu,\"batch_id\":\"%s\"}\n",
+        gwBoot,r.id,(unsigned long)r.seq,gwAccepted?"true":"false",reason,(unsigned long)millis(),batchId);
+    return true;
 }
 
 void printStatus(){
@@ -741,7 +771,7 @@ void printStatus(){
     Serial.printf(" cal_mask=0x%02x all_calibrated=%u dirty_mask=%u storage_ok=%u\n",unsigned(calMask),unsigned(calMask==0x7f),unsigned(dirtyStore.mask()),unsigned(dirtyStore.healthy()));
 }
 void setup(){
-    outputs.begin();Serial.begin(115200);dirtyStore.begin();Wire.begin(9,8);Wire.setTimeOut(25);
+    outputs.begin();Serial.begin(115200);snprintf(gwBoot,sizeof(gwBoot),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());dirtyStore.begin();Wire.begin(9,8);Wire.setTimeOut(25);
     adcReady=ads.begin(WQ_ADS_ADDRESS,&Wire);if(adcReady)ads.setGain(GAIN_TWOTHIRDS);
     bus.begin(18,17);
     Serial.println("EITEK bench V2: status | inventory | arm | pulse CH MS | calpulse CH MS | volume CH UL | capture | stop");
@@ -770,16 +800,16 @@ void loop(){
         printStatus();
     }
     if(cleaning.active()||cleaning.step==CleanStep::Fault){
-        const char* cmd=cli.read();if(cmd)cleanCli(cmd);
+        const char* cmd=cli.read();if(cmd&&!gatewayCli(cmd))cleanCli(cmd);
         cleanTick();return;
     }
     if(batch.held()){
-        const char* cmd=cli.read();if(cmd&&!cleanCli(cmd))batchCli(cmd);
+        const char* cmd=cli.read();if(cmd&&!gatewayCli(cmd)&&!cleanCli(cmd))batchCli(cmd);
         batchTick();return;
     }
     no2Tick();no3Tick();nh3Tick();
     const char* s=cli.read();if(!s)return;
-    if(cleanCli(s)||batchCli(s))return;
+    if(gatewayCli(s)||cleanCli(s)||batchCli(s))return;
     unsigned ch=0,ms=0;uint32_t args[2]={};
     if(!strcmp(s,"stop")){if(no2.active())no2Fault("operator_stop");else if(no3.active())no3Fault("operator_stop");else if(nh3.active())nh3Fault("operator_stop");else stopAll();Serial.println("STOP");}
     else if(no2Cli(s)||no3Cli(s)||nh3Cli(s))return;

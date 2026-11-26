@@ -19,6 +19,7 @@ jobs:
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/sample_evidence_test.cpp -o /tmp/sample-evidence-test && /tmp/sample-evidence-test
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/batch_test.cpp -o /tmp/batch-test && /tmp/batch-test
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/clean_test.cpp -o /tmp/clean-test && /tmp/clean-test
+      - run: g++ -std=c++17 -Wall -Wextra -Werror tests/gateway_test.cpp -o /tmp/gateway-test && /tmp/gateway-test
       - run: python3 -m unittest discover -s tests -p 'test_camera*.py'
   build:
     runs-on: ubuntu-latest
