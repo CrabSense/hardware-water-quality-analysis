@@ -23,3 +23,6 @@ Seven independent pump calibrations on the slave, staged two-point model with th
 
 ## P1.2 supervised Sera NO2
 Opt-in, supervised state machine: measured 5 mL sample, separately measured equivalents of five drops of each reagent, operator mixing confirmations, 300 s reaction, correlated image request/confirmation, drain. No autonomous chemistry, automatic mixing or light relay during capture. Disabled by default. See [NO2 commissioning](docs/v2-no2.md). Both boards require Modbus V4.
+
+## P1.3 supervised VASTOCEAN NO3
+Opt-in sequential assay, 5 mL, three liquid doses each equivalent to seven drops and one manual 1/3 scoop powder step with 10 s mixing gate, 120 s reaction, correlated image confirmation, OUT4/OUT7 drain. Confirm exact kit leaflet before use. NO2 and NO3 mutually exclusive. See [NO3 commissioning](docs/v2-no3.md). Modbus remains V4; update both boards to receive the slave loop timeout/receipt fix.

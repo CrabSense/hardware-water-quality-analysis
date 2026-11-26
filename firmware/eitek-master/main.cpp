@@ -6,6 +6,10 @@
 #include "../shared/Integration.h"
 #include "../shared/DosingCalibration.h"
 #include "../shared/No2Recipe.h"
+#include "../shared/No3Recipe.h"
+#ifndef WQ_ENABLE_NO3_SUPERVISED
+#define WQ_ENABLE_NO3_SUPERVISED 0
+#endif
 #ifndef WQ_ENABLE_NO2_SUPERVISED
 #define WQ_ENABLE_NO2_SUPERVISED 0
 #endif
@@ -19,6 +23,8 @@ uint32_t lastPoll=0,lastSample=0,lastGood=0;
 bool linked=false; uint16_t seq=0,remoteState=0,remoteChannel=0,calMask=0,receiptSeq=0,receiptResult=0;
 No2Recipe no2;No2Profile no2Profile;
 bool no2Issued=false;uint16_t no2Seq=0;uint32_t imageId=0,issuedAt=0;
+No3Recipe no3;No3Profile no3Profile;
+bool no3Issued=false;uint16_t no3Seq=0;uint32_t no3ImageId=0,no3IssuedAt=0;
 int16_t remoteTemp=static_cast<int16_t>(INVALID_TEMP);
 float adc1=NAN,adc2=NAN;
 #ifndef WQ_ADS_ADDRESS
@@ -146,18 +152,18 @@ bool no2Cli(const char* s){
         Serial.printf("NO2 %s profile=%u image_id=%lu\n",stepName(no2.step),unsigned(no2Profile.valid()),(unsigned long)imageId);return true;
     }
     if(!strcmp(s,"no2 reset")){
-        if(no2.active()||outputs.gate.armed||!no2RemoteIdle())Serial.println("REJECT busy_or_link");
+        if(no3.active()||no3.step==No3Step::Fault||no2.active()||outputs.gate.armed||!no2RemoteIdle())Serial.println("REJECT busy_or_link");
         else{no2.reset(millis());no2Profile=No2Profile{};imageId=0;Serial.println("NO2 RESET; inspect and clean before configuring again");}return true;
     }
     if(parseNumbers(s,"no2 profile",v,6)){
-        if(no2.step!=No2Step::Idle||outputs.gate.armed||!no2RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
+        if(no3.active()||no3.step==No3Step::Fault||no2.step!=No2Step::Idle||outputs.gate.armed||!no2RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
         No2Profile p;p.sourceMs=v[0];p.sampleMs=v[1];p.r1Ul=v[2];p.r2Ul=v[3];p.drainMs=v[4];p.totalDrainMs=v[5];
         if(!p.valid()){no2Profile=No2Profile{};Serial.println("REJECT profile");}
         else{no2Profile=p;Serial.println("NO2 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
         return true;
     }
     if(!strcmp(s,"no2 start")){
-        if(no2.step!=No2Step::Idle||!no2Preflight()||!no2.start(no2Profile,millis())){Serial.println("REJECT NO2 disabled/profile/calibration/interlock");return true;}
+        if(no3.active()||no3.step==No3Step::Fault||no2.step!=No2Step::Idle||!no2Preflight()||!no2.start(no2Profile,millis())){Serial.println("REJECT NO2 disabled/profile/calibration/interlock");return true;}
         imageId=0;no2MoveLog();return true;
     }
     if(!strcmp(s,"no2 confirm")){
@@ -168,6 +174,112 @@ bool no2Cli(const char* s){
     if(parseNumbers(s,"no2 image",v,1)){
         if(!no2Issued||v[0]!=imageId||!no2RemoteIdle()||outputs.gate.armed||!no2.imageConfirmed(millis()))Serial.println("REJECT image confirmation");
         else no2MoveLog();
+        return true;
+    }
+    return false;
+}
+
+// Supervised NO3: one actuator at a time; no unverified hydraulic or optical assumptions.
+void no3Fault(const char* reason){
+    outputs.stop();no3.fault(millis());no3Issued=false;
+    stopAll();Serial.printf("NO3 FAULT %s; inspect and recover manually\n",reason);
+}
+void no3MoveLog(){
+    no3Issued=false;Serial.printf("NO3 STEP %s\n",stepName(no3.step));
+    if(no3.step==No3Step::ConfirmSample)Serial.println("Verify isolated vial contains 5 mL; then no3 confirm");
+    if(no3.step==No3Step::Mix1||no3.step==No3Step::Mix2||no3.step==No3Step::Mix3)Serial.println("Mix sample manually; then no3 confirm");
+    if(no3.step==No3Step::PowderAdd)Serial.println("Add 1/3 supplied scoop of powder manually; then no3 confirm to start mixing timer");
+    if(no3.step==No3Step::PowderMix)Serial.println("Shake manually for 10 seconds; then no3 confirm");
+    if(no3.step==No3Step::Reaction)Serial.println("120 s reaction; ensure independent validated lighting before image");
+    if(no3.step==No3Step::Complete){stopAll();Serial.println("NO3 COMPLETE supervised sequence only; concentration not computed");}
+}
+bool no3RemoteIdle(){
+    return linked&&remoteChannel==0&&remoteState==0;
+}
+bool no3Preflight(){
+    if(!WQ_ENABLE_NO3_SUPERVISED||!WQ_ENABLE_OUTPUTS||!WQ_ENABLE_RS485||!no3Profile.valid()||outputs.gate.armed||!no3RemoteIdle()||(calMask&NO3_CAL_MASK)!=NO3_CAL_MASK)return false;
+    // Query exact requested volumes without energising any outputs, before filling.
+    if(!command(CHECK_VOLUME_BASE+3,uint16_t(no3Profile.r1Ul)))return false;
+    if(!command(CHECK_VOLUME_BASE+4,uint16_t(no3Profile.r2Ul)))return false;
+    return command(CHECK_VOLUME_BASE+5,uint16_t(no3Profile.r3Ul));
+}
+void no3Tick(){
+    if(!no3.active())return;
+    uint32_t now=millis();
+    if(no3.step!=No3Step::Image&&(!linked||elapsed(now,lastGood,LINK_LEASE_MS))){no3Fault("link");return;}
+    if(no3.confirmationExpired(now)){no3Fault("operator_timeout");return;}
+    switch(no3.step){
+    case No3Step::Source:case No3Step::Sample:case No3Step::Drain:case No3Step::TotalDrain:{
+        const uint8_t channel=no3.step==No3Step::Source?1:no3.step==No3Step::Sample?2:no3.step==No3Step::Drain?4:7;
+        const uint32_t duration=channel==1?no3.profile.sourceMs:channel==2?no3.profile.sampleMs:channel==4?no3.profile.drainMs:no3.profile.totalDrainMs;
+        if(!no3Issued){
+            if(!no3RemoteIdle()||outputs.gate.armed){no3Fault("local_interlock");return;}
+            if(!outputs.arm(now)||!outputs.pulse(channel,uint16_t(duration),8,now)){no3Fault("local_pulse");return;}
+            no3IssuedAt=now;no3Issued=true;
+        }else if(!outputs.gate.channel){
+            if(!outputs.gate.armed||!elapsed(now,no3IssuedAt,duration)){no3Fault("local_interrupted");return;}
+            outputs.stop();no3.completePulse(now);no3MoveLog();
+        }
+        break;}
+    case No3Step::Reagent1:case No3Step::Reagent2:case No3Step::Reagent3:{
+        const uint8_t pump=no3.step==No3Step::Reagent1?3:no3.step==No3Step::Reagent2?4:5;
+        const uint16_t ul=uint16_t(pump==3?no3.profile.r1Ul:pump==4?no3.profile.r2Ul:no3.profile.r3Ul);
+        if(!no3Issued){
+            if(!no3RemoteIdle()||outputs.gate.armed||!command(CMD_ARM,0)||!command(VOLUME_COMMAND_BASE+pump,ul)){
+                no3Fault("dose_rejected");return;
+            }
+            no3Seq=seq;no3IssuedAt=millis();no3Issued=true;
+        }else if(receiptSeq==no3Seq&&receiptResult==3){no3Fault("dose_interrupted");}
+        else if(receiptSeq==no3Seq&&receiptResult==2&&remoteChannel==0){
+            if(!command(0,0)){no3Fault("dose_disarm");return;}
+            remoteState=0;no3.completePulse(millis());no3MoveLog();
+        }else if(elapsed(now,no3IssuedAt,MAX_PULSE_MS+1500)){no3Fault("dose_timeout");}
+        break;}
+    case No3Step::Reaction:
+        if(!no3RemoteIdle()||outputs.gate.armed){no3Fault("reaction_interlock");return;}
+        if(no3.advanceReaction(now))no3MoveLog();
+        break;
+    case No3Step::Image:
+        if(elapsed(now,no3.since,NO3_IMAGE_MS)){no3Fault("image_timeout");return;}
+        if(!no3Issued){
+            if(!no3RemoteIdle()||outputs.gate.armed||!command(CMD_CAPTURE,0)){no3Fault("capture_rejected");return;}
+            no3ImageId=seq?seq:65536u;no3Issued=true;remoteState=STATE_CAMERA_BUSY;
+            Serial.printf("NO3 IMAGE %lu; verify decoded JPEG on slave UART, then no3 image %lu\n",(unsigned long)no3ImageId,(unsigned long)no3ImageId);
+        }else if(linked&&remoteState==STATE_CAMERA_FAULT){no3Fault("camera_fault");}
+        // USB init/teardown may temporarily prevent polling. No load is armed;
+        // image confirmation requires a fresh link and disarmed remote state.
+        break;
+    default:break;
+    }
+}
+bool no3Cli(const char* s){
+    uint32_t v[7]={};
+    if(!strcmp(s,"no3 status")){
+        Serial.printf("NO3 %s profile=%u image_id=%lu\n",stepName(no3.step),unsigned(no3Profile.valid()),(unsigned long)no3ImageId);return true;
+    }
+    if(!strcmp(s,"no3 reset")){
+        if(no2.active()||no2.step==No2Step::Fault||no3.active()||outputs.gate.armed||!no3RemoteIdle())Serial.println("REJECT busy_or_link");
+        else{no3.reset(millis());no3Profile=No3Profile{};no3ImageId=0;Serial.println("NO3 RESET; inspect and clean before configuring again");}return true;
+    }
+    if(parseNumbers(s,"no3 profile",v,7)){
+        if(no2.active()||no2.step==No2Step::Fault||no3.step!=No3Step::Idle||outputs.gate.armed||!no3RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
+        No3Profile p;p.sourceMs=v[0];p.sampleMs=v[1];p.r1Ul=v[2];p.r2Ul=v[3];p.r3Ul=v[4];p.drainMs=v[5];p.totalDrainMs=v[6];
+        if(!p.valid()){no3Profile=No3Profile{};Serial.println("REJECT profile");}
+        else{no3Profile=p;Serial.println("NO3 PROFILE staged RAM only; verify actual sample, drop volumes and drain timings");}
+        return true;
+    }
+    if(!strcmp(s,"no3 start")){
+        if(no2.active()||no2.step==No2Step::Fault||no3.step!=No3Step::Idle||!no3Preflight()||!no3.start(no3Profile,millis())){Serial.println("REJECT NO3 disabled/profile/calibration/interlock");return true;}
+        no3ImageId=0;no3MoveLog();return true;
+    }
+    if(!strcmp(s,"no3 confirm")){
+        if(!no3RemoteIdle()||outputs.gate.armed||!no3.confirm(millis()))Serial.println("REJECT confirmation");
+        else no3MoveLog();
+        return true;
+    }
+    if(parseNumbers(s,"no3 image",v,1)){
+        if(!no3Issued||v[0]!=no3ImageId||!no3RemoteIdle()||outputs.gate.armed||!no3.imageConfirmed(millis()))Serial.println("REJECT image confirmation");
+        else no3MoveLog();
         return true;
     }
     return false;
@@ -192,12 +304,13 @@ void setup(){
     bus.begin(18,17);
     Serial.println("EITEK bench V2: status | inventory | arm | pulse CH MS | calpulse CH MS | volume CH UL | capture | stop");
     inventory(true,false);
+    Serial.println("NO3 supervised only: no3 profile SOURCE_MS SAMPLE_MS R1_UL R2_UL R3_UL DRAIN_MS TOTAL_MS | start | confirm | image ID | reset | status");
     Serial.println("NO2 supervised only: no2 profile/source/sample/r1/r2/drain/total (see docs), no2 start | confirm | image ID | reset | status");
 }
 void loop(){
     uint32_t now=millis();outputs.tick(now);
     if(elapsed(now,lastPoll,250)){lastPoll=now;bool ok=poll();if(!ok&&WQ_ENABLE_RS485)outputs.stop();}
-    if(!no2.active()&&!outputs.gate.channel&&remoteChannel==0&&elapsed(now,lastSample,1000)){lastSample=now;
+    if(!no2.active()&&!no3.active()&&!outputs.gate.channel&&remoteChannel==0&&elapsed(now,lastSample,1000)){lastSample=now;
         // Check bus presence before library conversion to avoid missing-device busy wait.
         if(adcReady){Wire.beginTransmission(WQ_ADS_ADDRESS);if(Wire.endTransmission()==0){
             // Nonblocking conversion polling with bounded timeout.
@@ -210,12 +323,12 @@ void loop(){
         }else{adc1=adc2=NAN;}}
         printStatus();
     }
-    no2Tick();
+    no2Tick();no3Tick();
     const char* s=cli.read();if(!s)return;
     unsigned ch=0,ms=0;uint32_t args[2]={};
-    if(!strcmp(s,"stop")){if(no2.active())no2Fault("operator_stop");else stopAll();Serial.println("STOP");}
-    else if(no2Cli(s))return;
-    else if(no2.active()||no2.step==No2Step::Fault){Serial.println("REJECT NO2 owns controls or fault; use no2 status/reset");return;}
+    if(!strcmp(s,"stop")){if(no2.active())no2Fault("operator_stop");else if(no3.active())no3Fault("operator_stop");else stopAll();Serial.println("STOP");}
+    else if(no2Cli(s)||no3Cli(s))return;
+    else if(no2.active()||no2.step==No2Step::Fault||no3.active()||no3.step==No3Step::Fault){Serial.println("REJECT assay owns controls or fault; use no2/no3 status/reset");return;}
     else if(!strcmp(s,"status"))printStatus();
     else if(!strcmp(s,"inventory")){
         if(!outputs.gate.armed&&!remoteChannel&&remoteState!=STATE_CAMERA_BUSY)inventory(true,false);else Serial.println("REJECT busy");
