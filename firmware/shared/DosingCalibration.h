@@ -13,7 +13,10 @@ constexpr uint32_t CAL_VERIFY_PERCENT=5;
 struct Calibration {
     uint32_t loMs=0,hiMs=0,loUl=0,hiUl=0,checkMs=0,checkUl=0;
     bool fitted()const{
-        return loMs>=CAL_MIN_MS&&hiMs<=MAX_PULSE_MS&&hiMs>=loMs+CAL_MIN_SPAN_MS
+        // Validate bounds and ordering before subtraction; adding to untrusted
+        // uint32_t loMs can wrap around and admit an invalid interval.
+        return loMs>=CAL_MIN_MS&&loMs<=MAX_PULSE_MS&&hiMs<=MAX_PULSE_MS
+            &&hiMs>loMs&&(hiMs-loMs)>=CAL_MIN_SPAN_MS
             &&loUl>0&&hiUl<=CAL_MAX_UL&&hiUl>loUl;
     }
     uint32_t expected(uint32_t ms)const{

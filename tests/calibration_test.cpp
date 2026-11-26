@@ -11,6 +11,23 @@ int main(){
     assert(!c.duration(999,ms));assert(!c.duration(3001,ms));assert(!c.duration(65536,ms));
     uint32_t bad[3]={800,1000,1200};Calibration d;assert(!fit(1000,bad,3000,b,d));
     assert(!fit(1000,b,3000,a,d));assert(!fit(1000,a,1200,b,d));assert(!fit(UINT32_MAX,a,3000,b,d));
+    // Regression: UINT32_MAX and neighbouring values must not wrap into valid spans.
+    assert(!fit(UINT32_MAX-1,a,3000,b,d));
+    assert(!fit(UINT32_MAX-CAL_MIN_SPAN_MS+1,a,3000,b,d));
+    assert(!fit(1000,a,UINT32_MAX,b,d));
+    assert(!fit(MAX_PULSE_MS+1,a,MAX_PULSE_MS,b,d));
+    assert(!fit(CAL_MIN_MS-1,a,CAL_MIN_MS+CAL_MIN_SPAN_MS,b,d));
+    assert(!fit(3000,a,1000,b,d));
+    assert(!fit(3000,a,3000,b,d));
+    assert(!fit(CAL_MIN_MS,a,CAL_MIN_MS+CAL_MIN_SPAN_MS-1,b,d));
+    assert(fit(CAL_MIN_MS,a,CAL_MIN_MS+CAL_MIN_SPAN_MS,b,d));
+    assert(fit(MAX_PULSE_MS-CAL_MIN_SPAN_MS,a,MAX_PULSE_MS,b,d));
+    // A correct CRC is not sufficient: semantic validation is also mandatory.
+    Calibration malformed=c;malformed.loMs=UINT32_MAX;
+    uint8_t invalidRecord[CAL_BYTES];encodeCalibration(malformed,7,invalidRecord);
+    assert(!decodeCalibration(invalidRecord,7,d));
+    assert(!malformed.valid()&&malformed.expected(2000)==0);
+    assert(!malformed.duration(2000,ms)&&ms==0);
     uint8_t data[CAL_BYTES];encodeCalibration(c,7,data);assert(decodeCalibration(data,7,d)&&d.valid());
     assert(!decodeCalibration(data,6,d));data[13]^=1;assert(!decodeCalibration(data,7,d));
     uint32_t p[2];assert(parseNumbers("volume 7 250","volume",p,2)&&p[0]==7&&p[1]==250);
