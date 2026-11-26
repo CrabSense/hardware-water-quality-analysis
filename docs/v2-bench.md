@@ -15,7 +15,7 @@ EITEK PDF p.2–3: 24 V supply, ADS1115, isolated RS485, shared relay COM. Verif
 
 ADS1115 SDA9/SCL8, ADC1 pH, ADC2 TDS via separate DFR0504 isolators. ADC3/4 reserved. DI unused. W5500 CS10/MOSI11/MISO13/SCK12/RST14 reserved. RS485 TX17/RX18; direction not stated in PDF. ADS address and analog scaling require measurement; pin voltage is not terminal voltage. Configure 0–10 V mode. Never short isolation barrier.
 
-Slave: dosing GPIO4,5 (NO2); 6,7,15 (NO3); 16,17 (NH3); 18 reserve (blocked). SPI CS10/MOSI11/SCK12/MISO13; UART TX8/RX9; proposed DIR21. USB D-19/D+20 reserved for future UVC. Do not connect RO 5 V to ESP32. A/B twisted pair; confirm polarity, termination and module direction. Camera needs verified host VBUS and UVC Full-Speed, not yet implemented.
+Slave: dosing GPIO4,5 (NO2); 6,7,15 (NO3); 16,17 (NH3); 18 reserve (blocked). SPI CS10/MOSI11/SCK12/MISO13; UART TX8/RX9; proposed DIR21. USB D-19/D+20 reserved for future UVC. Do not connect RO 5 V to ESP32. A/B twisted pair; confirm polarity, termination and module direction. Camera needs verified host VBUS and UVC Full-Speed; separate P0.6 camera-only firmware is described in [v2-camera.md](v2-camera.md). The dosing slave itself does not yet run UVC.
 
 ## Enable gates only on isolated test bench
 Copy per-environment build flags locally; do not enable by default in tracked config.

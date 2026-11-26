@@ -11,3 +11,6 @@ pio run -e esp32-slave
 Use separate serial ports when uploading; monitor UART at 115200. Default builds inhibit GPIO outputs and RS485 transmission. Disconnect all actual loads during first boot/flashing, especially EITEK GPIO19/20 shared with native USB functionality; firmware cannot guarantee hardware reset states. Confirm relay/MOSFET polarity, boot pull states, transceiver logic, EITEK RS485 direction, ADC mode and scale, power limits and flyback/overcurrent protection before enabling real hardware. No automatic chemistry or network endpoints in this milestone.
 
 See [bench wiring and commissioning](docs/v2-bench.md) and [register contract](docs/v2-modbus.md). CI builds both targets and runs shared host tests. Hardware acceptance is not implied by compilation.
+
+## P0.6 USB camera commissioning
+A third, **camera-only** target for the same ESP32-S3 secondary board receives native USB UVC MJPEG and exports one fresh JPEG via UART. Do not run with load power connected. See [camera bench](docs/v2-camera.md). This is not yet integrated into the dosing slave or Kiosk. CI builds all three targets.
