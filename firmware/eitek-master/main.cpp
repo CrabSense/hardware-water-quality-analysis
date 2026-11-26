@@ -11,6 +11,10 @@
 #include "../shared/AssayOwnership.h"
 #include "../shared/SampleEvidence.h"
 #include "../shared/BatchPlan.h"
+#include "DirtyStore.h"
+#ifndef WQ_ENABLE_CLEAN_SUPERVISED
+#define WQ_ENABLE_CLEAN_SUPERVISED 0
+#endif
 #ifndef WQ_ENABLE_BATCH_SUPERVISED
 #define WQ_ENABLE_BATCH_SUPERVISED 0
 #endif
@@ -39,6 +43,8 @@ bool no3Issued=false;uint16_t no3Seq=0;uint32_t no3ImageId=0,no3IssuedAt=0;
 Nh3Recipe nh3;Nh3Profile nh3Profile;
 bool nh3Issued=false;uint16_t nh3Seq=0;uint32_t nh3ImageId=0,nh3IssuedAt=0;
 SampleEvidence nh3Evidence;char nh3SessionId[17]={};
+DirtyStore dirtyStore;CleanPlan cleaning;CleanProfile cleanProfiles[3];
+bool cleanIssued=false;uint32_t cleanPulseAt=0;
 BatchPlan batch;char batchId[17]={};bool batchOptical=false,batchTotalIssued=false;
 uint32_t batchTotalMs=0,batchTotalAt=0,routeAt=0;uint8_t routePrompt=0;
 int16_t remoteTemp=static_cast<int16_t>(INVALID_TEMP);
@@ -182,7 +188,7 @@ bool no2Cli(const char* s){
         return true;
     }
     if(!strcmp(s,"no2 start")){
-        if(assayBlocked(AssayId::No2,no2,no3,nh3)||no2.step!=No2Step::Idle||!no2Preflight()||!no2.start(no2Profile,millis())){Serial.println("REJECT NO2 disabled/profile/calibration/interlock");return true;}
+        if(assayBlocked(AssayId::No2,no2,no3,nh3)||no2.step!=No2Step::Idle||!dirtyStore.clean()||!no2Preflight()||!dirtyStore.mark(1)||!no2.start(no2Profile,millis())){Serial.println("REJECT NO2 disabled/profile/calibration/interlock");return true;}
         imageId=0;no2MoveLog();return true;
     }
     if(!strcmp(s,"no2 confirm")){
@@ -291,7 +297,7 @@ bool no3Cli(const char* s){
         return true;
     }
     if(!strcmp(s,"no3 start")){
-        if(assayBlocked(AssayId::No3,no2,no3,nh3)||no3.step!=No3Step::Idle||!no3Preflight()||!no3.start(no3Profile,millis())){Serial.println("REJECT NO3 disabled/profile/calibration/interlock");return true;}
+        if(assayBlocked(AssayId::No3,no2,no3,nh3)||no3.step!=No3Step::Idle||!dirtyStore.clean()||!no3Preflight()||!dirtyStore.mark(2)||!no3.start(no3Profile,millis())){Serial.println("REJECT NO3 disabled/profile/calibration/interlock");return true;}
         no3ImageId=0;no3MoveLog();return true;
     }
     if(!strcmp(s,"no3 confirm")){
@@ -440,7 +446,7 @@ bool nh3Cli(const char* s){
         return true;
     }
     if(!strcmp(s,"nh3 start")){
-        if(assayBlocked(AssayId::Nh3,no2,no3,nh3)||nh3.step!=Nh3Step::Idle||!nh3Preflight()||!nh3.start(nh3Profile,millis())){Serial.println("REJECT NH3 disabled/profile/calibration/interlock");return true;}
+        if(assayBlocked(AssayId::Nh3,no2,no3,nh3)||nh3.step!=Nh3Step::Idle||!dirtyStore.clean()||!nh3Preflight()||!dirtyStore.mark(4)||!nh3.start(nh3Profile,millis())){Serial.println("REJECT NH3 disabled/profile/calibration/interlock");return true;}
         nh3ImageId=0;nh3NewSession();nh3MoveLog();return true;
     }
     if(!strcmp(s,"nh3 confirm")){
@@ -483,7 +489,7 @@ void batchFault(const char* why){
 bool batchStart(uint32_t mask,bool scheduled){
     if(!WQ_ENABLE_BATCH_SUPERVISED||mask<1||mask>7||(scheduled&&mask!=7)||batch.held()
         ||assayBlocked(AssayId::None,no2,no3,nh3)||!batchIdleRemote()
-        ||!WQ_ENABLE_OUTPUTS||!WQ_ENABLE_RS485)return false;
+        ||!WQ_ENABLE_OUTPUTS||!WQ_ENABLE_RS485||!dirtyStore.clean())return false;
     const uint8_t need=batchRequiredCal(uint8_t(mask));
     if((calMask&need)!=need)return false;
     uint32_t total=0;
@@ -493,7 +499,7 @@ bool batchStart(uint32_t mask,bool scheduled){
     if((mask&1)&&!no2Preflight())return false;
     if((mask&2)&&!no3Preflight())return false;
     if((mask&4)&&!nh3Preflight())return false;
-    if(!batch.start(uint8_t(mask),scheduled,millis()))return false;
+    if(!dirtyStore.mark(uint8_t(mask))||!batch.start(uint8_t(mask),scheduled,millis()))return false;
     snprintf(batchId,sizeof(batchId),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
     batchTotalMs=total;batchTotalIssued=false;routePrompt=0;batchOptical=false;
     Serial.printf("BATCH START %s mode=%s mask=%lu\n",batchId,scheduled?"scheduled":"manual",(unsigned long)mask);batchStatus();return true;
@@ -639,6 +645,88 @@ bool batchCli(const char* cmd){
     Serial.println("REJECT batch owns controls; use batch status/route/confirm/optical/image/stop/reset");return true;
 }
 
+
+bool cleanIdleRemote(){return batchIdleRemote();}
+bool assayRunning(){return batch.running()||no2.active()||no3.active()||nh3.active();}
+void cleanStatus(){
+    Serial.printf("CLEAN STATUS {\"step\":\"%s\",\"dirty_mask\":%u,\"selected_mask\":%u,\"verified_mask\":%u,\"vial\":%u,\"cycle\":%u,\"storage_ok\":%s,\"ready_for_assay\":%s}\n",
+        cleanStepName(cleaning.step),unsigned(dirtyStore.mask()),unsigned(cleaning.mask),unsigned(cleaning.verified),unsigned(cleaning.owner),unsigned(cleaning.cycle),
+        dirtyStore.healthy()?"true":"false",(dirtyStore.clean()&&!cleaning.active()&&cleaning.step!=CleanStep::Fault&&!assayRunning()&&!batch.held()&&!assayBlocked(AssayId::None,no2,no3,nh3)&&cleanIdleRemote())?"true":"false");
+}
+void cleanMoveLog(){
+    cleanIssued=false;cleanStatus();
+    if(cleaning.step==CleanStep::Route)Serial.printf("CLEAN ROUTE %u; confirm clean water, isolated feed, open waste path: clean route %u\n",unsigned(cleaning.owner),unsigned(cleaning.owner));
+    if(cleaning.step==CleanStep::Verify)Serial.printf("CLEAN VERIFY %u; inspect empty vial and verify rinse procedure, then clean verify %u\n",unsigned(cleaning.owner),unsigned(cleaning.owner));
+}
+void cleanFault(const char* reason){
+    outputs.stop();cleaning.fault(millis());cleanIssued=false;stopAll();
+    Serial.printf("CLEAN FAULT %s; dirty mask retained; inspect manually before clean reset\n",reason);cleanStatus();
+}
+void cleanTick(){
+    if(!cleaning.active())return;
+    const uint32_t now=millis();
+    if(cleaning.expired(now)){cleanFault("timeout");return;}
+    if(!linked||elapsed(now,lastGood,LINK_LEASE_MS)||remoteState||remoteChannel||!dirtyStore.healthy()){cleanFault("interlock");return;}
+    const uint8_t channel=cleaning.channel();
+    if(channel){
+        if(!cleanIssued){
+            if(!cleanIdleRemote()||!outputs.arm(now)||!outputs.pulse(channel,uint16_t(cleaning.duration()),8,now)){
+                cleanFault("pulse_rejected");return;
+            }
+            cleanPulseAt=now;cleanIssued=true;
+        }else if(!outputs.gate.channel){
+            if(!outputs.gate.armed||!elapsed(now,cleanPulseAt,cleaning.duration())){cleanFault("pulse_interrupted");return;}
+            outputs.stop();
+            if(!cleaning.pulseDone(now)){cleanFault("transition");return;}
+            cleanMoveLog();
+        }else if(outputs.gate.channel!=channel){cleanFault("channel_mismatch");}
+        return;
+    }
+    if(!cleanIdleRemote()){cleanFault("idle_interlock");return;}
+    if(cleaning.settleDone(now))cleanMoveLog();
+}
+bool cleanCli(const char* cmd){
+    uint32_t v[7]={};
+    if(!strcmp(cmd,"clean status")){cleanStatus();return true;}
+    if(!strcmp(cmd,"clean reset")){
+        if(assayRunning()||cleaning.active()||!cleanIdleRemote()){Serial.println("REJECT clean reset");return true;}
+        cleaning.reset();for(auto& p:cleanProfiles)p=CleanProfile{};cleanIssued=false;
+        Serial.println("CLEAN RESET; dirty mask unchanged");cleanStatus();return true;
+    }
+    if(parseNumbers(cmd,"clean profile",v,7)){
+        if(assayRunning()||cleaning.step!=CleanStep::Idle||!cleanIdleRemote()||v[0]<1||v[0]>3){Serial.println("REJECT clean profile");return true;}
+        CleanProfile p;p.sourceMs=v[1];p.fillMs=v[2];p.settleMs=v[3];p.drainMs=v[4];p.totalMs=v[5];p.cycles=v[6];
+        cleanProfiles[v[0]-1]=p.valid()?p:CleanProfile{};Serial.println(p.valid()?"CLEAN PROFILE staged":"REJECT profile bounds");return true;
+    }
+    if(parseNumbers(cmd,"clean start",v,1)){
+        if(!WQ_ENABLE_CLEAN_SUPERVISED||!WQ_ENABLE_OUTPUTS||!WQ_ENABLE_RS485||assayRunning()
+            ||cleaning.step!=CleanStep::Idle||!cleanIdleRemote()||v[0]<1||v[0]>ALL_VIALS||!dirtyStore.healthy()){
+            Serial.println("REJECT clean start");return true;
+        }
+        const uint8_t m=uint8_t(v[0]);
+        for(uint8_t i=0;i<3;++i)if((m&(1u<<i))&&!cleanProfiles[i].valid()){Serial.println("REJECT missing clean profile");return true;}
+        // Journal before any pulse, even if cleaning previously clean vials.
+        if(!dirtyStore.mark(m)||!cleaning.start(m,cleanProfiles,millis())){Serial.println("REJECT dirty journal or plan");return true;}
+        cleanMoveLog();return true;
+    }
+    if(parseNumbers(cmd,"clean route",v,1)){
+        if(v[0]<1||v[0]>3||!cleanIdleRemote()||!cleaning.route(uint8_t(v[0]),millis()))Serial.println("REJECT clean route");
+        else cleanMoveLog();
+        return true;
+    }
+    if(parseNumbers(cmd,"clean verify",v,1)){
+        if(v[0]<1||v[0]>3||!cleanIdleRemote()||!cleaning.verify(uint8_t(v[0]),millis())){Serial.println("REJECT clean verification");return true;}
+        if(cleaning.step==CleanStep::Complete){
+            if(cleaning.verified!=cleaning.mask||!dirtyStore.verified(cleaning.mask)){cleanFault("journal_commit");return true;}
+            Serial.println("CLEAN COMPLETE operator-verified rinse, not chemical residue measurement");
+        }
+        cleanMoveLog();return true;
+    }
+    if((cleaning.active()||cleaning.step==CleanStep::Fault)&&(!strcmp(cmd,"stop")||!strcmp(cmd,"clean stop"))){if(cleaning.active())cleanFault("operator_stop");else stopAll();return true;}
+    if(cleaning.active()||cleaning.step==CleanStep::Fault){Serial.println("REJECT cleaning owns controls or fault; use clean status/reset");return true;}
+    return false;
+}
+
 void printStatus(){
     Serial.printf("link=%d local=%u armed=%d slave_state=%u slave_ch=%u temp_c=",linked,outputs.gate.channel,outputs.gate.armed,remoteState,remoteChannel);
     if(linked&&uint16_t(remoteTemp)!=INVALID_TEMP)Serial.printf("%.2f",remoteTemp/100.0f);else Serial.print("INVALID");
@@ -650,14 +738,16 @@ void printStatus(){
         float ppm=(133.42f*v*v*v-255.86f*v*v+857.39f*v)*0.5f*WQ_TDS_FACTOR;
         if(isfinite(ppm)&&raw>=0&&raw<2.3f&&t>=0&&t<=50&&ppm>=0&&ppm<=1000)Serial.printf(" tds_ppm=%.1f",ppm);else Serial.print(" tds=OUT_OF_RANGE");
     }else Serial.print(" tds=UNCALIBRATED_OR_INVALID");
-    Serial.printf(" cal_mask=0x%02x all_calibrated=%u\n",unsigned(calMask),unsigned(calMask==0x7f));
+    Serial.printf(" cal_mask=0x%02x all_calibrated=%u dirty_mask=%u storage_ok=%u\n",unsigned(calMask),unsigned(calMask==0x7f),unsigned(dirtyStore.mask()),unsigned(dirtyStore.healthy()));
 }
 void setup(){
-    outputs.begin();Serial.begin(115200);Wire.begin(9,8);Wire.setTimeOut(25);
+    outputs.begin();Serial.begin(115200);dirtyStore.begin();Wire.begin(9,8);Wire.setTimeOut(25);
     adcReady=ads.begin(WQ_ADS_ADDRESS,&Wire);if(adcReady)ads.setGain(GAIN_TWOTHIRDS);
     bus.begin(18,17);
     Serial.println("EITEK bench V2: status | inventory | arm | pulse CH MS | calpulse CH MS | volume CH UL | capture | stop");
     inventory(true,false);
+    Serial.println("CLEAN supervised: clean status | clean profile ID SOURCE FILL SETTLE DRAIN TOTAL CYCLES | clean start MASK");
+    cleanStatus();
     Serial.println("BATCH supervised: batch start manual MASK | batch start scheduled | batch status");
     Serial.println("NH3 supervised only: nh3 profile SOURCE_MS SAMPLE_MS R1_UL R2_UL DRAIN_MS TOTAL_MS | start | confirm | image ID | reset | status");
     Serial.println("NO3 supervised only: no3 profile SOURCE_MS SAMPLE_MS R1_UL R2_UL R3_UL DRAIN_MS TOTAL_MS | start | confirm | image ID | reset | status");
@@ -666,7 +756,7 @@ void setup(){
 void loop(){
     uint32_t now=millis();outputs.tick(now);
     if(elapsed(now,lastPoll,250)){lastPoll=now;bool ok=poll();if(!ok&&WQ_ENABLE_RS485)outputs.stop();}
-    if(!batch.running()&&!no2.active()&&!no3.active()&&!nh3.active()&&!outputs.gate.channel&&remoteChannel==0&&elapsed(now,lastSample,1000)){lastSample=now;
+    if(!cleaning.active()&&!batch.running()&&!no2.active()&&!no3.active()&&!nh3.active()&&!outputs.gate.channel&&remoteChannel==0&&elapsed(now,lastSample,1000)){lastSample=now;
         // Check bus presence before library conversion to avoid missing-device busy wait.
         if(adcReady){Wire.beginTransmission(WQ_ADS_ADDRESS);if(Wire.endTransmission()==0){
             // Nonblocking conversion polling with bounded timeout.
@@ -679,13 +769,17 @@ void loop(){
         }else{adc1=adc2=NAN;}}
         printStatus();
     }
+    if(cleaning.active()||cleaning.step==CleanStep::Fault){
+        const char* cmd=cli.read();if(cmd)cleanCli(cmd);
+        cleanTick();return;
+    }
     if(batch.held()){
-        const char* cmd=cli.read();if(cmd)batchCli(cmd);
+        const char* cmd=cli.read();if(cmd&&!cleanCli(cmd))batchCli(cmd);
         batchTick();return;
     }
     no2Tick();no3Tick();nh3Tick();
     const char* s=cli.read();if(!s)return;
-    if(batchCli(s))return;
+    if(cleanCli(s)||batchCli(s))return;
     unsigned ch=0,ms=0;uint32_t args[2]={};
     if(!strcmp(s,"stop")){if(no2.active())no2Fault("operator_stop");else if(no3.active())no3Fault("operator_stop");else if(nh3.active())nh3Fault("operator_stop");else stopAll();Serial.println("STOP");}
     else if(no2Cli(s)||no3Cli(s)||nh3Cli(s))return;
@@ -698,6 +792,7 @@ void loop(){
         if(command(CMD_CAPTURE,0)){remoteState=STATE_CAMERA_BUSY;Serial.printf("CAM REQUEST %u (JPEG on slave UART)\n",seq?unsigned(seq):65536u);}
         else Serial.println("REJECT: capture not acknowledged");
     }else if(!strcmp(s,"arm")){if(!WQ_ENABLE_RS485||!canMasterArm(linked,outputs.gate.channel!=0,remoteState,remoteChannel)){Serial.println("REJECT: link or remote busy/fault");return;}
+        if(!dirtyStore.mark(ALL_VIALS)){Serial.println("REJECT dirty journal");return;}
         if(!outputs.arm(millis())){Serial.println("REJECT: outputs disabled");return;}
         if(!command(CMD_ARM,0))outputs.stop();else remoteState=1;Serial.println(outputs.gate.armed?"ARM request accepted":"REJECT");}
     else if(parsePulse(s,"pulse",ch,ms)){
