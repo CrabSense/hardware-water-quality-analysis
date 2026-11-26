@@ -32,3 +32,6 @@ Opt-in, measured 5 mL sample, two liquid doses CH6/7 each equivalent to five dro
 
 ## P1.4.1 NH3 sample evidence
 At sample pulse completion before any reagent, master snapshots calibrated pH and fresh Modbus temperature observation. Missing/invalid readings are null. Emits NH3 SAMPLE JSON and NH3 IMAGE_LINK JSON with shared boot-session identifier; nh3 evidence reprints snapshot while no output active. Boot uptime only; gateway must establish real UTC/time alignment and physical sensor-vial association. No salinity inferred from TDS and no NH3 conversion on firmware. See [NH3 commissioning](docs/v2-nh3.md).
+
+## P1.5 supervised batch coordinator
+Manual mask 1..7 or scheduled request (all three). Independent reaction timers with exclusive actuator/camera ownership; longest reactions first; reject deadline conflicts, require manual routing/mixing/powder and optical positioning, verify image identity before drain; one shared total drain. Disabled by default; no RTC schedule or unattended chemistry. See [batch commissioning](docs/v2-batch.md). Modbus V4 unchanged.
