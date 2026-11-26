@@ -9,6 +9,8 @@
 #include "../shared/No3Recipe.h"
 #include "../shared/Nh3Recipe.h"
 #include "../shared/AssayOwnership.h"
+#include "../shared/SampleEvidence.h"
+#include <esp_system.h>
 #ifndef WQ_ENABLE_NH3_SUPERVISED
 #define WQ_ENABLE_NH3_SUPERVISED 0
 #endif
@@ -32,6 +34,7 @@ No3Recipe no3;No3Profile no3Profile;
 bool no3Issued=false;uint16_t no3Seq=0;uint32_t no3ImageId=0,no3IssuedAt=0;
 Nh3Recipe nh3;Nh3Profile nh3Profile;
 bool nh3Issued=false;uint16_t nh3Seq=0;uint32_t nh3ImageId=0,nh3IssuedAt=0;
+SampleEvidence nh3Evidence;char nh3SessionId[17]={};
 int16_t remoteTemp=static_cast<int16_t>(INVALID_TEMP);
 float adc1=NAN,adc2=NAN;
 #ifndef WQ_ADS_ADDRESS
@@ -294,6 +297,42 @@ bool no3Cli(const char* s){
     return false;
 }
 
+bool nh3RemoteIdle();
+// Snapshot once at end of sample pulse, before reagents and before operator confirmation.
+// No UTC clock and no verified sensor-to-vial hydraulic synchronization at this layer.
+void nh3NewSession(){
+    snprintf(nh3SessionId,sizeof(nh3SessionId),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
+    nh3Evidence=SampleEvidence{};
+}
+float nh3ReadPh(){
+    if(!adcReady||WQ_ADC1_SCALE<=0||WQ_PH_SLOPE==0)return NAN;
+    Wire.beginTransmission(WQ_ADS_ADDRESS);if(Wire.endTransmission()!=0)return NAN;
+    ads.startADCReading(ADS1X15_REG_CONFIG_MUX_SINGLE_0,false);
+    uint32_t start=millis();
+    while(!ads.conversionComplete()){if(elapsed(millis(),start,40))return NAN;delay(1);}
+    float v=ads.computeVolts(ads.getLastConversionResults());
+    return v*WQ_ADC1_SCALE*WQ_PH_SLOPE+WQ_PH_OFFSET;
+}
+void nh3EmitEvidence(){
+    if(!nh3Evidence.recorded)return;
+    const auto& e=nh3Evidence;
+    Serial.printf("NH3 SAMPLE {\"session_id\":\"%s\",\"sample_uptime_ms\":%lu,\"ph_observed_uptime_ms\":%lu,\"ph\":",
+        nh3SessionId,(unsigned long)e.sampleMs,(unsigned long)e.phObservedMs);
+    if(e.phValid)Serial.printf("%.3f",e.ph);else Serial.print("null");
+    Serial.printf(",\"temperature_observed_uptime_ms\":%lu,\"temperature_c\":",(unsigned long)e.tempObservedMs);
+    if(e.tempValid)Serial.printf("%.2f",e.tempCenti/100.0f);else Serial.print("null");
+    Serial.printf(",\"temperature_register_max_age_ms\":%lu,\"sensor_vial_alignment_verified\":false,\"clock\":\"boot_uptime\",\"salinity_ppt\":null}\n",(unsigned long)TEMP_REGISTER_MAX_AGE_MS);
+}
+bool nh3Snapshot(uint32_t sampleAt){
+    // Called only after disarming local outputs and before any reagent command.
+    if(outputs.gate.armed||!nh3RemoteIdle())return false;
+    float ph=nh3ReadPh();uint32_t phAt=millis();
+    bool ok=poll();uint32_t tempAt=millis();
+    nh3Evidence.record(sampleAt,phAt,ph,WQ_ADC1_SCALE>0&&WQ_PH_SLOPE!=0,tempAt,remoteTemp,ok);
+    nh3EmitEvidence();
+    return ok&&nh3RemoteIdle();
+}
+
 // Supervised NH3: one actuator at a time; no unverified hydraulic or optical assumptions.
 void nh3Fault(const char* reason){
     outputs.stop();nh3.fault(millis());nh3Issued=false;
@@ -331,7 +370,9 @@ void nh3Tick(){
             nh3IssuedAt=now;nh3Issued=true;
         }else if(!outputs.gate.channel){
             if(!outputs.gate.armed||!elapsed(now,nh3IssuedAt,duration)){nh3Fault("local_interrupted");return;}
-            outputs.stop();nh3.completePulse(now);nh3MoveLog();
+            outputs.stop();
+            if(nh3.step==Nh3Step::Sample&&!nh3Snapshot(now)){nh3Fault("sample_snapshot_interlock");return;}
+            nh3.completePulse(millis());nh3MoveLog();
         }
         break;}
     case Nh3Step::Reagent1:case Nh3Step::Reagent2:{
@@ -358,6 +399,8 @@ void nh3Tick(){
             if(!nh3RemoteIdle()||outputs.gate.armed||!command(CMD_CAPTURE,0)){nh3Fault("capture_rejected");return;}
             nh3ImageId=seq?seq:65536u;nh3Issued=true;remoteState=STATE_CAMERA_BUSY;
             Serial.printf("NH3 IMAGE %lu; verify decoded JPEG on slave UART, then nh3 image %lu\n",(unsigned long)nh3ImageId,(unsigned long)nh3ImageId);
+            Serial.printf("NH3 IMAGE_LINK {\"session_id\":\"%s\",\"capture_id\":%lu,\"requested_uptime_ms\":%lu,\"reaction_finished_uptime_ms\":%lu}\n",
+                nh3SessionId,(unsigned long)nh3ImageId,(unsigned long)millis(),(unsigned long)nh3.since);
         }else if(linked&&remoteState==STATE_CAMERA_FAULT){nh3Fault("camera_fault");}
         // USB init/teardown may temporarily prevent polling. No load is armed;
         // image confirmation requires a fresh link and disarmed remote state.
@@ -367,12 +410,15 @@ void nh3Tick(){
 }
 bool nh3Cli(const char* s){
     uint32_t v[6]={};
+    if(!strcmp(s,"nh3 evidence")){
+        if(outputs.gate.channel||remoteChannel||!nh3Evidence.recorded)Serial.println("REJECT evidence_not_available_or_busy");else nh3EmitEvidence();return true;
+    }
     if(!strcmp(s,"nh3 status")){
         Serial.printf("NH3 %s profile=%u image_id=%lu\n",stepName(nh3.step),unsigned(nh3Profile.valid()),(unsigned long)nh3ImageId);return true;
     }
     if(!strcmp(s,"nh3 reset")){
         if(assayBlocked(AssayId::Nh3,no2,no3,nh3)||nh3.active()||outputs.gate.armed||!nh3RemoteIdle())Serial.println("REJECT busy_or_link");
-        else{nh3.reset(millis());nh3Profile=Nh3Profile{};nh3ImageId=0;Serial.println("NH3 RESET; inspect and clean before configuring again");}return true;
+        else{nh3.reset(millis());nh3Profile=Nh3Profile{};nh3ImageId=0;nh3Evidence=SampleEvidence{};nh3SessionId[0]=0;Serial.println("NH3 RESET; inspect and clean before configuring again");}return true;
     }
     if(parseNumbers(s,"nh3 profile",v,6)){
         if(assayBlocked(AssayId::Nh3,no2,no3,nh3)||nh3.step!=Nh3Step::Idle||outputs.gate.armed||!nh3RemoteIdle()){Serial.println("REJECT busy_or_link");return true;}
@@ -383,7 +429,7 @@ bool nh3Cli(const char* s){
     }
     if(!strcmp(s,"nh3 start")){
         if(assayBlocked(AssayId::Nh3,no2,no3,nh3)||nh3.step!=Nh3Step::Idle||!nh3Preflight()||!nh3.start(nh3Profile,millis())){Serial.println("REJECT NH3 disabled/profile/calibration/interlock");return true;}
-        nh3ImageId=0;nh3MoveLog();return true;
+        nh3ImageId=0;nh3NewSession();nh3MoveLog();return true;
     }
     if(!strcmp(s,"nh3 confirm")){
         if(!nh3RemoteIdle()||outputs.gate.armed||!nh3.confirm(millis()))Serial.println("REJECT confirmation");
