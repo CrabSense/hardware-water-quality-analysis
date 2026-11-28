@@ -21,6 +21,7 @@ jobs:
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/clean_test.cpp -o /tmp/clean-test && /tmp/clean-test
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/gateway_test.cpp -o /tmp/gateway-test && /tmp/gateway-test
       - run: python3 -m unittest discover -s tests -p 'test_camera*.py'
+      - run: python3 -m unittest discover -s tests -p 'test_build_isolation.py'
   build:
     runs-on: ubuntu-latest
     strategy:
