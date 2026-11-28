@@ -1,3 +1,5 @@
+#error "Legacy NO2 sketch is archived and must not be built or flashed. Use the isolated PlatformIO V2 targets."
+
 #include <Arduino.h>
 
 #include "config/Pins.h"

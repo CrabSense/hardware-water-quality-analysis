@@ -1,7 +1,7 @@
 # CrabSense Hardware Water Quality Analysis V2 — bench firmware
 
 Targets: EITEK WERS3-8IO-4AI (master, 4 MB flash) and ESP32-S3 N16R8 (slave, 16 MB flash / 8 MB PSRAM).
-Legacy root sketch and drivers remain for reference, excluded from the new build. Do NOT flash legacy firmware onto V2 wiring.
+Legacy root sketch and drivers remain for reference only, excluded from the new build. The root sketch deliberately fails compilation, including Arduino IDE. Do NOT remove this guard or flash legacy firmware onto V2 wiring. Draft legacy PR #1 is superseded by the V2 declared inventory; do not merge it. CI checks default target isolation and disabled output flags.
 
 ## Build / bench
 ```sh
